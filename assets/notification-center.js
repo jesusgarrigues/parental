@@ -66,7 +66,7 @@
     const history=make('details');history.className='alert-history';history.append(make('summary','Historial de avisos revisados o de más de 24 horas'));
     function entry(item){const card=make('article');card.className='card event '+(item.is_new?'blocked':'');card.append(make('strong',callbacks.name(item.service)+(item.is_new?' · Nuevo':'')));
       card.append(make('p',(item.attempts||1)+' consultas detectadas · Primera: '+new Date((item.first_seen||item.created)*1000).toLocaleString()+' · Última: '+new Date((item.last_seen||item.created)*1000).toLocaleString()));
-      const details=make('details');details.append(make('summary','Ver detalle'));if(item.detail.domain)details.append(make('p',item.detail.domain));card.append(details);
+      const details=make('details');details.append(make('summary','Ver detalle'));if(item.detail.domain)details.append(make('p',item.detail.domain));if(item.detail.servers?.length)details.append(make('p','AdGuard: '+item.detail.servers.join(' · ')));card.append(details);
       const button=make('button','Revisar permiso');button.type='button';button.onclick=()=>callbacks.navigate(item.target);card.append(button);return card;}
     for(const [client,list] of clients){const fresh=list.filter(i=>i.is_new),older=list.filter(i=>!i.is_new);
       if(fresh.length){const section=make('section');section.className='alert-client';section.append(make('h3',client));const mark=make('button','Marcar avisos de este cliente como leídos');mark.type='button';mark.onclick=async()=>{mark.disabled=true;try{await callbacks.request('me/alerts/read',{client});await poll();}catch(e){section.prepend(make('p',e.message));mark.disabled=false;}};section.append(mark);for(const item of fresh)section.append(entry(item));root.append(section);}

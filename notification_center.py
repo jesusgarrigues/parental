@@ -139,6 +139,9 @@ class Center:
     def group(self, uid, client, service, created):
         row = auth.DB.execute('SELECT * FROM alert_groups WHERE user_id=? AND client=? AND service=? AND created<=? AND created>? ORDER BY created DESC LIMIT 1',(uid,client,service,created,created-GROUP_WINDOW)).fetchone()
         if row is None:
+            # A late query from the other DNS may precede the first observed query by seconds.
+            row=auth.DB.execute('SELECT * FROM alert_groups WHERE user_id=? AND client=? AND service=? AND created>? AND created<=? ORDER BY created LIMIT 1',(uid,client,service,created,created+120)).fetchone()
+        if row is None:
             gid=auth.DB.execute('INSERT INTO alert_groups(user_id,client,service,created) VALUES(?,?,?,?)',(uid,client,service,created)).lastrowid
             row=auth.DB.execute('SELECT * FROM alert_groups WHERE id=?',(gid,)).fetchone()
         return row
@@ -192,13 +195,18 @@ class Center:
                 evaluated,excluded=blocked_alerts.evaluate(user,events,config,now=now)
                 eligible = {e['id'] for e in evaluated}
                 auth.DB.execute('INSERT OR REPLACE INTO alert_meta VALUES(?,?)', ('scan:'+str(user['id']),json.dumps({'time':now,'events_in_scope':sum(self.visible(user,e) for e in events),'eligible':len(eligible),'excluded':{k:v for k,v in excluded.items() if k!='not_blocked_or_outside_scope'}})))
-                for event in events:
+                for event in sorted(events,key=lambda e:(e['time'],e['id'])):
                     if event['kind'] != 'blocked' or not self.visible(user, event): continue
-                    if event['time'] < self.started or event['id'] not in eligible:
-                        reasons['history_preferences_or_cooldown'] = reasons.get('history_preferences_or_cooldown', 0) + 1
+                    source='block:'+hashlib.sha256(json.dumps([event[k] for k in ('time','client','service','domain')],ensure_ascii=False).encode()).hexdigest()
+                    detail={'domain':event['domain'],'attempts':event.get('attempts',1),'last_seen':event.get('last_seen',event['time']),'servers':event.get('server_names',event.get('servers',[]))}
+                    existing=auth.DB.execute('SELECT 1 FROM alerts WHERE user_id=? AND source=?',(user['id'],source)).fetchone()
+                    if existing:
+                        self.insert(user,source,'blocked',event['client'],event['service'],event['time'],detail)
                         continue
-                    source = 'block:' + hashlib.sha256(json.dumps([event[k] for k in ('time','client','service','domain')], ensure_ascii=False).encode()).hexdigest()
-                    made += self.insert(user, source, 'blocked', event['client'], event['service'], event['time'], {'domain': event['domain'],'attempts':event.get('attempts',1),'last_seen':event.get('last_seen',event['time'])})
+                    if event['time'] < self.started or event['id'] not in eligible:
+                        reasons['history_preferences_or_cooldown']=reasons.get('history_preferences_or_cooldown',0)+1
+                        continue
+                    made+=self.insert(user,source,'blocked',event['client'],event['service'],event['time'],detail)
                 if user['role'] == 'admin':
                     for row in auth.DB.execute('SELECT s.user_id,s.created,u.username FROM signups s JOIN users u ON u.id=s.user_id').fetchall():
                         if row['created'] >= self.started:

@@ -226,4 +226,19 @@ class GroupedBadgeTests(CenterFixture):
         self.assertEqual(data['unread'],0);self.assertEqual(len(data['groups']),1);self.assertEqual(data['groups'][0]['records'],10)
         self.assertEqual(auth.DB.execute('SELECT COUNT(*) FROM alerts').fetchone()[0],10)
 
+    def test_late_query_joins_current_group_without_a_second_badge(self):
+        item=self.fresh()
+        self.center.insert(self.admin,'late-dns','blocked','TV','youtube',self.now-10,{'domain':'youtube.com'})
+        auth.DB.commit()
+        data=self.center.snapshot(self.admin)
+        self.assertEqual(len(data['groups']),1);self.assertEqual(data['unread'],1)
+
+    def test_existing_event_details_update_after_notification_collection_window(self):
+        self.now+=10;event=self.event();self.center.sync([event]);first=self.now
+        self.now+=200;event.update(attempts=12,last_seen=self.now,server_names=['Principal','Réplica'])
+        self.center.sync([event]);data=self.center.snapshot(self.admin)
+        self.assertEqual(len(data['groups']),1);self.assertEqual(data['groups'][0]['attempts'],12)
+        self.assertEqual(data['groups'][0]['first_seen'],first);self.assertEqual(data['groups'][0]['last_seen'],self.now)
+        self.assertEqual(data['groups'][0]['detail']['servers'],['Principal','Réplica'])
+
 if __name__=='__main__':unittest.main()

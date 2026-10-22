@@ -413,5 +413,5 @@ class Group:
         for item in events:
             rows = self.a.DB.execute('SELECT node,COUNT(*),MAX(occurred) FROM ag_event_sources WHERE event_id=? GROUP BY node', (item['id'],)).fetchall()
             if rows:
-                item.update(attempts=sum(r[1] for r in rows), last_seen=max(r[2] for r in rows), servers=[r[0] for r in rows])
+                item.update(attempts=sum(r[1] for r in rows), last_seen=max(r[2] for r in rows), servers=[r[0] for r in rows],server_names=[next((n['name'] for n in self.nodes() if n['id']==r[0]),r[0]) for r in rows])
         return events
