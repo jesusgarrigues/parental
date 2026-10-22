@@ -20,7 +20,7 @@ jobs:
         run: |
           pip install black==26.5.1
           black --check --diff app.py
-      - run: python -m unittest -v test_app.py test_diagnostics.py test_auth.py test_nintendo.py test_nintendo_routes.py test_oidc.py test_catalog.py test_blocked_alerts.py test_notification_center.py test_security.py
+      - run: python -m unittest -v test_app.py test_diagnostics.py test_auth.py test_nintendo.py test_nintendo_routes.py test_oidc.py test_catalog.py test_blocked_alerts.py test_notification_center.py test_security.py test_adguard_group.py
       - run: python test_http.py
       - uses: actions/setup-node@v7
         with:

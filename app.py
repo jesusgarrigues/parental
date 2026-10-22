@@ -12,6 +12,9 @@ import nintendo
 import oidc
 import blocked_alerts
 import notification_center
+import adguard_group
+import sys
+import uuid
 import security
 from datetime import datetime
 
@@ -258,7 +261,10 @@ def server_config():
 
 def public_server():
     c = server_config()
-    return {k: v for k, v in c.items() if k != 'password'} | {'has_password': bool(c.get('password'))}
+    public={k:v for k,v in c.items() if k not in ('password','replicas')}
+    public['has_password']=bool(c.get('password'))
+    public['replicas']=[{k:v for k,v in node.items() if k!='password'} | {'has_password':bool(node.get('password'))} for node in c.get('replicas',[])]
+    return public
 
 
 class AdGuardError(RuntimeError):
@@ -345,6 +351,8 @@ def network_error(endpoint, error, config=None):
 
 
 def api(path, payload=None, method=None, config=None):
+    if config is None and payload is None and globals().get('ADGUARDS') and ADGUARDS.enabled:
+        return ADGUARDS.primary(path)
     cfg = config or server_config()
     if cfg.get('demo'):
         if path == 'clients':
@@ -437,14 +445,15 @@ def api(path, payload=None, method=None, config=None):
         raise safe from None
 
 
-def global_config():
+def global_config(config=None):
+    fetch = (lambda path: api(path,config=config)) if config is not None else api
     return {
-        'filtering_enabled': api('filtering/status')['enabled'],
-        'parental_enabled': api('parental/status')['enabled'],
-        'safebrowsing_enabled': api('safebrowsing/status')['enabled'],
-        'safe_search': api('safesearch/status'),
-        'blocked_services': api('blocked_services/get'),
-        'protection_enabled': api('status')['protection_enabled'],
+        'filtering_enabled': fetch('filtering/status')['enabled'],
+        'parental_enabled': fetch('parental/status')['enabled'],
+        'safebrowsing_enabled': fetch('safebrowsing/status')['enabled'],
+        'safe_search': fetch('safesearch/status'),
+        'blocked_services': fetch('blocked_services/get'),
+        'protection_enabled': fetch('status')['protection_enabled'],
     }
 
 
@@ -473,6 +482,8 @@ def effective(client, global_values):
 
 
 def baseline_for(name):
+    if globals().get('ADGUARDS') and ADGUARDS.enabled:
+        return ADGUARDS.baseline(name)
     row = DB.execute('SELECT config FROM baselines WHERE client=?', (name,)).fetchone()
     if not row:
         return None
@@ -493,12 +504,13 @@ def save_baseline(name, b):
 
 
 def event(client, service, domain='', kind='blocked', occurred=None):
-    DB.execute(
+    cursor=DB.execute(
         'INSERT INTO events(time,client,service,domain,kind) VALUES(?,?,?,?,?)',
         (time.time() if occurred is None else occurred, client, service, domain, kind),
     )
     DB.execute('DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT 500)')
     DB.commit()
+    return cursor.lastrowid
 
 
 def overlay(current, baseline, active, globals_):
@@ -532,6 +544,13 @@ def overlay(current, baseline, active, globals_):
 
 
 def reconcile():
+    if ADGUARDS.enabled:
+        errors=[]
+        for action in (ADGUARDS.retry_changes, ADGUARDS.reconcile):
+            try: action()
+            except adguard_group.GroupError as error: errors.append(str(error))
+        if errors: raise adguard_group.GroupError('; '.join(errors),ADGUARDS.health())
+        return
     rows = DB.execute('SELECT client FROM baselines').fetchall()
     if not rows:
         return
@@ -583,6 +602,8 @@ def reconcile():
 
 
 def permit(name, service, minutes, require_blocked=False, granted_by=''):
+    if ADGUARDS.enabled:
+        return ADGUARDS.permit(name,service,minutes,require_blocked,granted_by)
     if type(minutes) is not int or not 1 <= minutes <= 1440:
         raise ValueError('Duración entre 1 y 1440 minutos')
     services = {s['id'] for s in api('blocked_services/all')['blocked_services']} | set(RESTRICTIONS)
@@ -684,6 +705,11 @@ def save_client(name, patch, add=False):
     current = next((c for c in clients if c['name'] == name), None)
     if not add and not current:
         raise ValueError('Cliente desconocido')
+    if ADGUARDS.enabled:
+        target=copy.deepcopy((baseline_for(name) or {}).get('base',current) or {})
+        target.update(patch)
+        validate_client(target)
+        return ADGUARDS.save_client(name,target if add else patch,add)
     b = baseline_for(name) if not add else None
     target = copy.deepcopy(b['base'] if b else current or {})
     target.update(patch)
@@ -721,6 +747,8 @@ def save_global(patch):
             raise ValueError('Servicios globales inválidos')
         validate_services(value.get('ids'))
         validate_schedule(value.get('schedule', {}))
+    if ADGUARDS.enabled:
+        return ADGUARDS.save_global(patch)
     current = global_config()
     completed = []
     try:
@@ -744,41 +772,80 @@ def save_global(patch):
 
 
 def save_server(body, test_only=False):
-    if not isinstance(body, dict) or set(body) - {'url', 'username', 'password', 'demo'}:
+    allowed={'url','username','password','demo','name','replicas','sync_policy_ack'}
+    if not isinstance(body,dict) or set(body)-allowed:
         raise ValueError('Servidor inválido')
-    old = server_config()
-    cfg = {k: body.get(k, old.get(k, '')) for k in ('url', 'username', 'password', 'demo')}
-    if type(cfg['demo']) is not bool or any(not isinstance(cfg[k], str) for k in ('url', 'username', 'password')):
+    old=server_config()
+    cfg={key:body.get(key,old.get(key,'')) for key in ('url','username','password','demo')}
+    cfg['name']=body.get('name',old.get('name','Principal'))
+    cfg['sync_policy_ack']=body.get('sync_policy_ack',old.get('sync_policy_ack',False))
+    if type(cfg['demo']) is not bool or type(cfg['sync_policy_ack']) is not bool:
         raise ValueError('Servidor inválido')
-    parsed = urlsplit(cfg['url'])
-    if not cfg['demo'] and (
-        parsed.scheme not in ('http', 'https')
-        or not parsed.hostname
-        or parsed.username
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ValueError('Indica una URL HTTP/HTTPS sin credenciales incrustadas')
-    if not test_only and DB.execute('SELECT 1 FROM baselines').fetchone():
-        raise ValueError('Finaliza todos los permisos antes de cambiar de servidor')
-    status = api('status', config=cfg)
-    api('clients', config=cfg)
-    if test_only:
-        for endpoint in (
-            'filtering/status',
-            'parental/status',
-            'safebrowsing/status',
-            'safesearch/status',
-            'blocked_services/get',
-            'blocked_services/all',
-        ):
-            api(endpoint, config=cfg)
+    def validate(node):
+        if any(not isinstance(node.get(k),str) or len(node[k])>4096 for k in ('url','username','password')) or not isinstance(node.get('name'),str) or not node['name'].strip() or len(node['name'])>60:
+            raise ValueError('Nombre, URL o credenciales del servidor inválidos')
+        parsed=urlsplit(node['url'])
+        if not cfg['demo'] and (parsed.scheme not in ('http','https') or not parsed.hostname or parsed.username or parsed.query or parsed.fragment):
+            raise ValueError('Indica una URL HTTP/HTTPS sin credenciales incrustadas')
+        if parsed.hostname: parsed.port
+    validate(cfg)
+    raw=body.get('replicas',old.get('replicas',[]))
+    if not isinstance(raw,list) or len(raw)>3:
+        raise ValueError('Se admiten hasta tres réplicas por grupo')
+    saved={n['id']:n for n in old.get('replicas',[])}
+    replicas=[]
+    used={'origin'}
+    urls={cfg['url'].rstrip('/')}
+    for node in raw:
+        if not isinstance(node,dict) or set(node)-{'id','name','url','username','password'}:
+            raise ValueError('Réplica inválida')
+        key=node.get('id') or 'node-'+uuid.uuid4().hex[:16]
+        if not isinstance(key,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,48}',key) or key in used:
+            raise ValueError('Identificador de réplica inválido o duplicado')
+        used.add(key)
+        previous=saved.get(key,{})
+        result={k:node.get(k,previous.get(k,'')) for k in ('name','url','username','password')}
+        result['id']=key
+        validate(result)
+        if result['url'].rstrip('/') in urls:
+            raise ValueError('Cada servidor debe tener una URL distinta')
+        urls.add(result['url'].rstrip('/'))
+        replicas.append(result)
+    cfg['replicas']=replicas
+    if replicas and cfg['demo']:
+        raise ValueError('Para conectar réplicas desactiva el modo demostración')
+    if replicas and not test_only and not cfg['sync_policy_ack']:
+        raise ValueError('Confirma que adguard-sync no copia clientes, servicios ni ajustes generales que gestionará Parental')
+    active=DB.execute('SELECT 1 FROM baselines').fetchone() or DB.execute('SELECT 1 FROM ag_baselines').fetchone() or ADGUARDS.pending()
+    topology=lambda config:[(n['id'],n['url'],n.get('demo',False)) for n in ADGUARDS.nodes(config)]
+    if not test_only and active and (not old.get('replicas') or topology(old)!=topology(cfg)):
+        raise ValueError('Finaliza los permisos y restauraciones pendientes antes de añadir, quitar o cambiar servidores')
+    versions=[]
+    failures=[]
+    for node in ADGUARDS.nodes(cfg):
+        try:
+            status=api('status',config=node)
+            api('clients',config=node)
+            if test_only:
+                for endpoint in ('filtering/status','parental/status','safebrowsing/status','safesearch/status','blocked_services/get','blocked_services/all'):
+                    api(endpoint,config=node)
+            versions.append(node['name']+': '+status.get('version',''))
+        except Exception as error:
+            failures.append(node['name']+': '+ADGUARDS.error(error))
+    if failures:
+        raise adguard_group.GroupError('Conexión no confirmada. '+'; '.join(failures))
     if not test_only:
-        DB.execute("INSERT OR REPLACE INTO settings VALUES('server',?)", (json.dumps(cfg),))
-        DB.execute('DELETE FROM seen')
-        DB.execute('DELETE FROM events')
+        DB.execute("INSERT OR REPLACE INTO settings VALUES('server',?)",(json.dumps(cfg),))
+        if topology(old)!=topology(cfg):
+            DB.execute('DELETE FROM ag_cache')
+            DB.execute('DELETE FROM ag_health')
+            DB.execute('DELETE FROM ag_client_health')
+        if old.get('url')!=cfg['url']:
+            DB.execute('DELETE FROM seen')
+            DB.execute('DELETE FROM events')
+            DB.execute('DELETE FROM ag_event_sources')
         DB.commit()
-    return {'ok': True, 'version': status.get('version', '')}
+    return {'ok':True,'version':'; '.join(versions),'servers':ADGUARDS.health() if not test_only else []}
 
 
 def client_identity(q, clients):
@@ -801,9 +868,12 @@ def client_identity(q, clients):
     return max(matches)[1] if matches else value or 'Desconocido'
 
 
-def poll():
+def poll(config=None,node_id=None,origin_clients=None):
     global LAST_POLL
-    clients = api('clients')['clients']
+    if config is None and ADGUARDS.enabled:
+        return ADGUARDS.poll()
+    fetch=(lambda path:api(path,config=config)) if config is not None else api
+    clients=fetch('clients')['clients']
     reasons = {
         'FilteredSafeBrowsing': '@safebrowsing',
         'FilteredParental': '@parental',
@@ -811,11 +881,11 @@ def poll():
         'SafeSearch': '@safesearch',
         'FilteredBlackList': '@filtering',
     }
-    data = api('querylog?limit=500')['data']
+    data = fetch('querylog?limit=500')['data']
     counts = {}
     recognized = 0
     unknown = 0
-    catalog = {item['id'] for item in api('blocked_services/all')['blocked_services']}
+    catalog = {item['id'] for item in fetch('blocked_services/all')['blocked_services']}
     for q in reversed(data):
         reason = q.get('reason', '')
         counts[reason] = counts.get(reason, 0) + 1
@@ -831,6 +901,8 @@ def poll():
         key = (
             q.get('time', '') + '|' + q.get('client', '') + '|' + q.get('question', {}).get('name', '') + '|' + service
         )
+        query_key=key
+        key=(node_id or 'origin')+'|'+key
         if DB.execute('SELECT 1 FROM seen WHERE key=?', (key,)).fetchone():
             continue
         try:
@@ -843,12 +915,18 @@ def poll():
             continue
         DB.execute('INSERT INTO seen VALUES(?,?)', (key, time.time()))
         client = client_identity(q, clients)
+        if origin_clients is not None:
+            local=next((c for c in clients if c['name']==client),None)
+            client=ADGUARDS.logical_name(local,origin_clients) if local else None
+            if not client:
+                unknown+=1
+                continue
         recent = DB.execute(
-            'SELECT 1 FROM events WHERE client=? AND service=? AND kind=? AND time BETWEEN ? AND ?',
+            'SELECT id FROM events WHERE client=? AND service=? AND kind=? AND time BETWEEN ? AND ?',
             (client, service, 'blocked', occurred - 300, occurred + 300),
         ).fetchone()
-        if not recent:
-            event(client, service, q.get('question', {}).get('name', ''), occurred=occurred)
+        event_id=recent[0] if recent else event(client, service, q.get('question', {}).get('name', ''), occurred=occurred)
+        ADGUARDS.observe(event_id,node_id or 'origin',query_key,occurred)
     DB.execute('DELETE FROM seen WHERE time<?', (time.time() - 86400,))
     DB.commit()
     LAST_POLL = {
@@ -894,6 +972,8 @@ def state():
         'auto_clients': info.get('auto_clients', []),
         'supported_tags': info.get('supported_tags', []),
         'base_clients': bases,
+        'adguard_clients':ADGUARDS.clients_status() if ADGUARDS.enabled else {},
+        'adguard_servers':ADGUARDS.health() if ADGUARDS.enabled else [],
         'effective': {c['name']: effective(c, g) for c in info['clients']},
         'base_effective': {n: effective(c, g) for n, c in bases.items()},
         'services': api('blocked_services/all')['blocked_services'],
@@ -920,6 +1000,8 @@ def scoped_state(user):
         attach_appearance(client)
     for key in ('base_clients', 'effective', 'base_effective'):
         data[key] = {k: v for k, v in data[key].items() if k in allowed}
+    data['adguard_clients']={name:value for name,value in data.get('adguard_clients',{}).items() if name in allowed}
+    if user['role']!='admin':data['adguard_servers']=[]
     data['leases'] = [l for l in data['leases'] if l['client'] in allowed]
     data['events'] = [e for e in data['events'] if e['client'] in allowed] if user['role'] != 'solicitante' else []
     if user['role'] != 'admin':
@@ -1075,13 +1157,18 @@ def worker():
         with LOCK:
             try:
                 reconcile()
-                poll()
                 LAST_ERROR = ''
             except AdGuardError as e:
                 LAST_ERROR = str(e)
             except Exception:
                 LAST_ERROR = 'Fallo al sincronizar AdGuard. Revisa el diagnóstico del servidor.'
                 security.log_failure('Error interno de sincronización (sin datos de credenciales)')
+        with LOCK:
+            try:
+                poll()
+            except Exception:
+                LAST_ERROR=LAST_ERROR or 'No se pudo leer toda la actividad de AdGuard. Revisa el diagnóstico.'
+                security.log_failure('Registro de consultas de AdGuard',logging.WARNING)
         try:
             refresh_nintendo_requests()
         except Exception:
@@ -1092,6 +1179,7 @@ def worker():
                     dict(zip(('id', 'time', 'client', 'service', 'domain', 'kind'), row))
                     for row in DB.execute('SELECT * FROM events ORDER BY id DESC LIMIT 500')
                 ]
+            with LOCK: ADGUARDS.decorate_events(events)
             ALERTS.sync(events)
         except Exception:
             security.log_failure('Avisos: fallo de recogida; consulta el diagnóstico de avisos', logging.WARNING)
@@ -1596,6 +1684,8 @@ class Handler(BaseHTTPRequestHandler):
                         409, dict(result, error=result.get('message', 'Nintendo ha rechazado el cambio'))
                     )
                 self.respond(200, result)
+        except adguard_group.GroupError as e:
+            self.respond(502,{'error':str(e),'servers':e.states})
         except nintendo.NintendoError as e:
             data = {'error': str(e)}
             if self.path in ('/api/permit', '/api/cancel', '/api/nintendo/policy') and 'op' in locals():
@@ -1618,6 +1708,9 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(
                 502, {'error': 'La operación no se pudo completar. Revisa solicitudes y permisos antes de reintentar.'}
             )
+
+
+ADGUARDS=adguard_group.Group(sys.modules[__name__])
 
 
 if __name__ == '__main__':

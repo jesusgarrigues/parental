@@ -32,7 +32,7 @@ Los avisos nuevos elegibles se guardan en una bandeja por usuario en el servidor
 
 La ventana de 120 segundos se usa al **recoger una consulta nueva de AdGuard**, no para borrar un aviso ya pendiente. Después de recogerlo se conserva en la bandeja durante 30 días, hasta leerlo. No se importan todos los eventos históricos al actualizar. Los envíos pendientes se intentan durante una hora y tienen un máximo de cinco intentos con espera creciente; leer el aviso, resolver su solicitud o cambiar su ámbito cancela el envío. Recibir un aviso nunca concede un permiso.
 
-El contador de Avisos muestra bloqueos no leídos. El icono instalado suma ese número y las solicitudes pendientes, cuando el sistema permite Badging API. Leer una solicitud no la resuelve y no reduce su contador de pendientes. Al pulsar un aviso se abre su autorización o solicitud concreta; la sesión y los roles siguen siendo obligatorios. Marcar todos como leídos no aprueba nada. Otros dispositivos actualizan su contador al volver a abrir o recibir un nuevo Push; no se envía Push silencioso solo para cambiar números.
+El contador de Actividad muestra **clientes con avisos nuevos**, con un máximo de una unidad por cliente. El icono instalado suma ese número y las solicitudes pendientes, cuando el sistema permite Badging API. Los intentos se agrupan por cliente y servicio durante 24 horas desde la primera detección; las repeticiones actualizan su detalle y no reinician la ventana. Al vencer, dejan de contar y quedan en el historial. Revisar un grupo marca sus registros como leídos; las repeticiones de ese grupo no lo vuelven a activar durante su ventana. También se pueden marcar todos los avisos de un cliente como leídos. Por ejemplo, 463 registros en cuatro clientes y dos solicitudes producen una burbuja de seis. La migración agrupa los avisos existentes y conserva el historial. Leer una solicitud no la resuelve y no reduce su contador de pendientes. Al pulsar un aviso se abre su autorización o solicitud concreta; la sesión y los roles siguen siendo obligatorios. Marcar todos como leídos no aprueba nada. Otros dispositivos actualizan su contador al volver a abrir o recibir un nuevo Push; no se envía Push silencioso solo para cambiar números.
 
 ### Activar el envío desde Docker
 
@@ -57,3 +57,7 @@ Web Push no sustituye a los proveedores externos de #48 ni a aprobar/editar dire
 2. Pulsa **Probar desde el servidor** y deja Parental en segundo plano unos 15 segundos.
 3. Si no llega, el diagnóstico indica el motivo del proveedor: `push_provider_403:BadJwtToken` (firma o contacto rechazado), `push_subscription_expired` (vuelve a activar) o `push_network_or_configuration` (el contenedor no sale a Internet).
 4. Los avisos se envían con prioridad alta para que Android no los retrase en reposo.
+
+## Varios AdGuard
+
+[Configuración de un grupo y convivencia con adguard-sync](adguard-multiservidor.md). La actividad se recoge de cada instancia y se agrupa bajo el mismo cliente, conservando la procedencia para diagnóstico.

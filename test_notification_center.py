@@ -5,7 +5,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 import auth, notification_center as alerts
 
 
-class CenterTests(unittest.TestCase):
+class CenterFixture(unittest.TestCase):
     def setUp(self):
         self.old=auth.DB;self.folder=tempfile.TemporaryDirectory();auth.init(self.folder.name)
         self.now=time.time();self.sent=[]
@@ -29,6 +29,9 @@ class CenterTests(unittest.TestCase):
         key=ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(serialization.Encoding.X962,serialization.PublicFormat.UncompressedPoint)
         return {'endpoint':endpoint,'keys':{'auth':base64.urlsafe_b64encode(b'a'*16).rstrip(b'=').decode(),'p256dh':base64.urlsafe_b64encode(key).rstrip(b'=').decode()}}
 
+
+
+class CenterTests(CenterFixture):
     def test_old_history_not_replayed(self):
         self.center.sync([self.event(when=self.now-20)])
         self.assertEqual(self.center.snapshot(self.admin,self.device)['unread'],0)
@@ -182,5 +185,45 @@ class CenterTests(unittest.TestCase):
         headers={k.lower():v for k,v in captured[0][0].headers.items()}
         self.assertEqual(headers['urgency'],'high');self.assertEqual(self.center.contact,alerts.DEFAULT_CONTACT)
         self.assertEqual(captured[0][1]['timeout'],10)
+
+
+class GroupedBadgeTests(CenterFixture):
+    def test_463_records_four_clients_two_requests_badge_six(self):
+        self.now+=20
+        for i in range(463):
+            self.center.insert(self.admin,'example:'+str(i),'blocked','TV'+str(i%4),'youtube' if i%3 else 'tiktok',self.now+i,{'domain':'youtube.com'})
+        # The timestamps are all past/current and remain in a single immutable window per service.
+        self.now+=500
+        for i in range(2):auth.DB.execute("INSERT INTO requests(user_id,client,service,minutes,status,created) VALUES(?,?,'youtube',10,'pending',?)",(self.child['id'],'TV',self.now))
+        auth.DB.commit();data=self.center.snapshot(self.admin)
+        self.assertEqual(data['unread'],4);self.assertEqual(data['pending_requests'],2);self.assertEqual(data['badge'],6)
+        self.assertEqual(sum(g['records'] for g in data['groups']),463)
+
+    def test_window_not_extended_and_old_history_still_visible(self):
+        item=self.fresh();start=self.now
+        self.now+=3600
+        self.center.sync([self.event(2)])
+        group=self.center.snapshot(self.admin)['groups'][0]
+        self.assertEqual(group['first_seen'],start);self.assertEqual(group['records'],2)
+        self.now=start+86400
+        data=self.center.snapshot(self.admin);self.assertEqual(data['unread'],0);self.assertEqual(len(data['groups']),1)
+        self.center.sync([self.event(3)])
+        data=self.center.snapshot(self.admin);self.assertEqual(data['unread'],1);self.assertEqual(len(data['groups']),2)
+
+    def test_read_group_and_repetitions_remain_read_service_new_can_count(self):
+        item=self.fresh();self.center.read(self.admin,{'id':item['id']});self.now+=600
+        self.center.sync([self.event(2)])
+        data=self.center.snapshot(self.admin);self.assertEqual(data['unread'],0);self.assertEqual(data['groups'][0]['records'],2)
+        self.center.sync([self.event(3,service='tiktok')]);self.assertEqual(self.center.snapshot(self.admin)['unread'],1)
+        self.center.read(self.admin,{'client':'TV'});self.assertEqual(self.center.snapshot(self.admin)['unread'],0)
+        with self.assertRaises(auth.Forbidden):self.center.read(self.parent,{'client':'Other TV'})
+
+    def test_migration_of_existing_alerts_is_idempotent_and_keeps_history(self):
+        self.now+=20
+        for i in range(10):auth.DB.execute("INSERT INTO alerts(user_id,source,kind,client,service,created,detail) VALUES(?,?,'blocked','TV','youtube',?,'{}')",(self.admin['id'],'legacy:'+str(i),self.now-90000+i))
+        auth.DB.commit();self.center.migrate_groups();self.center.migrate_groups()
+        data=self.center.snapshot(self.admin)
+        self.assertEqual(data['unread'],0);self.assertEqual(len(data['groups']),1);self.assertEqual(data['groups'][0]['records'],10)
+        self.assertEqual(auth.DB.execute('SELECT COUNT(*) FROM alerts').fetchone()[0],10)
 
 if __name__=='__main__':unittest.main()

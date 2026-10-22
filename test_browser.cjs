@@ -19,7 +19,7 @@ state.requests=requests;
 const user={id:1,username:'admin',avatar:'face-01',role:'admin',clients:[],edit_policy:true,max_minutes:1440};
 let authenticEnabled=false,authenticLinked=false,authenticPending=null;const authenticConfig={enabled:false,issuer:'',discovery_url:'',client_id:'',public_url:'',secret_set:false,callback_url:''};
 const alertPreferences={mode:'all',services:[],protections:[],cooldown_minutes:5,clients:{}};let alertsFailure=false;
-let inboxItems=[],inboxUnread=0,deliveryAccepted=false,deliveryDue=true,deliveryAttempts=0,autoNotifyCalls=0;
+let inboxGroups=null,inboxItems=[],inboxUnread=0,deliveryAccepted=false,deliveryDue=true,deliveryAttempts=0,autoNotifyCalls=0;
 // Serve the page with the exact CSP app.py sends, so any violation fails the browser test.
 const csp=require('node:child_process').execFileSync('python3',['-c','import sys,security;print(security.content_security_policy(open(sys.argv[1]).read()),end="")',root+'/index.html'],{cwd:root,encoding:'utf8'});
 const calls=[];let adguardDown=false,clientFailure=null,readFailures=0,saveDelay=0;
@@ -33,10 +33,10 @@ const calls=[];let adguardDown=false,clientFailure=null,readFailures=0,saveDelay
    if(url.pathname==='/api/state'&&adguardDown)return route.fulfill({status:502,contentType:'application/json',body:JSON.stringify({error:'AdGuard unavailable fixture'})});
    const path=url.pathname.slice(5);let body=null;
    if(req.method()==='POST'){body=req.postDataJSON();calls.push({path,body});}
-   if(path==='me/alerts/read'){for(const item of inboxItems)if(body.id===null||item.id===body.id)item.read_at=Date.now()/1000;inboxUnread=inboxItems.filter(i=>!i.read_at).length;return route.fulfill({contentType:'application/json',body:'{"ok":true}'});}
+   if(path==='me/alerts/read'){for(const item of inboxItems)if(body.id===null||item.id===body.id||item.client===body.client)item.read_at=Date.now()/1000;if(inboxGroups){for(const group of inboxGroups)if(body.id===null||group.id===body.id||group.client===body.client){group.read_at=Date.now()/1000;group.is_new=false;}inboxUnread=new Set(inboxGroups.filter(g=>g.is_new).map(g=>g.client)).size;}else inboxUnread=inboxItems.filter(i=>!i.read_at).length;return route.fulfill({contentType:'application/json',body:'{"ok":true}'});}
    if(path==='me/alerts/result'){if(body.status==='claim'){deliveryAttempts++;return route.fulfill({contentType:'application/json',body:JSON.stringify({claimed:deliveryDue&&!deliveryAccepted})});}deliveryAccepted=body.status==='accepted';deliveryDue=false;return route.fulfill({contentType:'application/json',body:'{"ok":true}'});}
    if(path==='me/alerts/device')return route.fulfill({contentType:'application/json',body:'{"ok":true,"push":false}'});
-   if(path==='me/alerts')return route.fulfill({contentType:'application/json',body:JSON.stringify({items:inboxItems,unread:inboxUnread,requests,diagnostic:{push:false},deliveries:deliveryDue&&!deliveryAccepted?inboxItems.filter(i=>!i.read_at):[]})});
+   if(path==='me/alerts')return route.fulfill({contentType:'application/json',body:JSON.stringify({items:inboxItems,groups:inboxGroups,unread:inboxUnread,requests,diagnostic:{push:false},deliveries:deliveryDue&&!deliveryAccepted?inboxItems.filter(i=>!i.read_at):[]})});
    if(path==='state'&&readFailures>0){readFailures--;return route.fulfill({status:502,contentType:'application/json',body:JSON.stringify({error:'No se pudo actualizar el estado de AdGuard.'})});}
    if(path==='client'&&body){
     if(saveDelay)await new Promise(resolve=>setTimeout(resolve,saveDelay));
@@ -395,6 +395,20 @@ const calls=[];let adguardDown=false,clientFailure=null,readFailures=0,saveDelay
  await page.locator('#blocked-authorization').waitFor();await page.waitForFunction(()=>document.querySelector('[data-alert-count]').hidden);assert.equal(await page.locator('#blocked-authorization h2').innerText(),'Permitir YouTube');
  await page.locator('#blocked-authorization').getByRole('button',{name:'Cerrar',exact:true}).click();
  await page.evaluate(()=>{window.ParentalNotifications.state=window.__notificationState;window.ParentalNotifications.notify=window.__notificationNotify;go('settings');});await page.locator('[data-auto-notification-status]').waitFor();await page.screenshot({path:shots+'/movil-diagnostico-entrega.png',fullPage:true});
+ // Grouped attention count and two-server settings at all supported mobile widths.
+ inboxItems=[{id:910,kind:'blocked',client:'iMac de Emma',service:'youtube',created:Date.now()/1000,read_at:null,detail:{domain:'youtube.com'},target:{kind:'client',client:'iMac de Emma',service:'youtube',alert_id:910}},{id:911,kind:'blocked',client:'iMac de Emma',service:'tiktok',created:Date.now()/1000,read_at:null,detail:{domain:'tiktok.com'},target:{kind:'client',client:'iMac de Emma',service:'tiktok',alert_id:911}},{id:912,kind:'blocked',client:'iMac de Martín',service:'youtube',created:Date.now()/1000,read_at:null,detail:{domain:'youtube.com'},target:{kind:'client',client:'iMac de Martín',service:'youtube',alert_id:912}}];
+ inboxGroups=inboxItems.map(i=>({...i,is_new:true,attempts:154,first_seen:i.created-3600,last_seen:i.created,expires:i.created+82800,records:154}));inboxUnread=2;deliveryDue=false;
+ await page.evaluate(()=>go('activity'));await page.evaluate(()=>ParentalAlertCenter.poll());await page.waitForFunction(()=>document.querySelector('[data-alert-count]').textContent==='2');
+ assert.equal(await page.locator('[data-alert-inbox] .alert-client').count(),2);assert.equal(await page.locator('[data-alert-inbox] .alert-client article').count(),3);
+ for(const width of [320,375,390,430]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Grouped alerts overflow at '+width);}
+ await page.screenshot({path:shots+'/movil-avisos-agrupados.png',fullPage:true});
+ await page.locator('.alert-client').filter({has:page.getByRole('heading',{name:'iMac de Emma',exact:true})}).getByRole('button',{name:'Marcar avisos de este cliente como leídos',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('[data-alert-count]').textContent==='1');assert.equal(await page.locator('.alert-history article').count(),2);
+ await page.evaluate(()=>go('server'));await page.locator('#s-url').waitFor();await page.getByRole('button',{name:'Añadir réplica',exact:true}).click();
+ await page.getByLabel('Nombre de la réplica',{exact:true}).fill('AdGuard secundario');await page.getByLabel('URL de la réplica',{exact:true}).fill('http://replica.test:8053');await page.getByLabel('Usuario de la réplica',{exact:true}).fill('admin');await page.getByLabel('Contraseña de la réplica',{exact:true}).fill('private-test-only');await page.locator('#s-demo').uncheck();await page.locator('#s-sync-ack').check();
+ for(const width of [320,375,390,430]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Replica settings overflow at '+width);}
+ // Do not retain credentials in review screenshots.
+ await page.getByLabel('Contraseña de la réplica',{exact:true}).fill('');await page.screenshot({path:shots+'/movil-dos-adguard.png',fullPage:true});await page.evaluate(()=>{dirty=false;});
  await page.setViewportSize({width:1440,height:1000});
  await page.evaluate(async()=>{
   token='';for(const n of document.body.children)n.style.display='none';document.body.style.display='block';document.body.style.padding='32px';
