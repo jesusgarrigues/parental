@@ -12,6 +12,13 @@ from http.server import ThreadingHTTPServer
 import app, nintendo
 from test_nintendo import FakeBackend
 app.NINTENDO.close()
+original_permit=app.permit
+def scoped_group_failure(name,service,minutes,*args,**kwargs):
+    if minutes==19:
+        import adguard_group
+        raise adguard_group.GroupError('private-other-client', [{'client':'private-other-client','querylog':{'excluded_clients':['private-other-client']}}])
+    return original_permit(name,service,minutes,*args,**kwargs)
+app.permit=scoped_group_failure
 fixed_time=datetime(2026,9,4,18,0,tzinfo=ZoneInfo('Europe/Madrid')).timestamp()
 def fake_backend():
     backend=FakeBackend()
@@ -63,6 +70,10 @@ try:
     rid=child.call('request',{'client':'iMac de Emma','service':'youtube','minutes':20,'reason':'Vídeo de clase'})['id']
     assert admin.call('state')['leases']==[]
     parent=Client();parent.call('auth/login',{'username':'parent','password':'parent-password-1234'})
+    private_error=parent.call('permit',{'client':'iMac de Emma','service':'youtube','minutes':19},502)
+    assert 'private-other-client' not in json.dumps(private_error) and 'servers' not in private_error
+    admin_error=admin.call('permit',{'client':'iMac de Emma','service':'youtube','minutes':19},502)
+    assert admin_error['servers'][0]['client']=='private-other-client'
     alert_device='http-device-1234567890'
     admin.call('me/alerts/device',{'device':alert_device})
     assert admin.call('me/alerts?device='+alert_device)['diagnostic']['registered']
