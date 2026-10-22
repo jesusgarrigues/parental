@@ -1,7 +1,7 @@
 (() => {
   let queue=Promise.resolve(),key=null,hint='';
   const supported=()=>typeof navigator.setAppBadge==='function'&&typeof navigator.clearAppBadge==='function';
-  function status(){return hint||(supported()?'El icono suma solicitudes pendientes y avisos sin leer si el sistema lo permite.':'Este navegador no permite fijar el contador del icono. En Android la burbuja puede depender de los avisos activos y del fabricante.');}
+  function status(){return hint||(supported()?'El icono suma solicitudes pendientes y clientes con avisos nuevos si el sistema lo permite.':'Este navegador no permite fijar el contador del icono. En Android la burbuja puede depender de los avisos activos y del fabricante.');}
   function render(){for(const n of document.querySelectorAll('[data-app-badge-status]'))n.textContent=status();}
   function update(count,account){
     const safe=account&&Number.isSafeInteger(count)&&count>0?count:0;

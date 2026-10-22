@@ -1,5 +1,5 @@
 // Only allowlisted public assets are cached. Accounts, API responses and HTML are never cached.
-const CACHE = 'parental-static-v6';
+const CACHE = 'parental-static-v7';
 importScripts('/assets/notification-targets.js','/assets/appearance-catalog.js');
 const PUBLIC = new Set([
   '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/favicon.png', '/icon.svg',

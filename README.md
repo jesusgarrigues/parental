@@ -72,3 +72,7 @@ node test_ui.cjs
 ```
 
 Pruebas de caducidad tras reinicio, permisos simultáneos, herencia global, cambios globales y de cliente durante permisos, recuperación de errores, clientes dinámicos, validación y protección de credenciales. La integración debe verificarse con la versión instalada de AdGuard Home; las pruebas locales usan el simulador. El workflow también ejecuta `test_browser.cjs` con Playwright para comprobar escritorio, móvil, favoritos, categorías, ajustes y preservación de formularios; sus capturas se guardan en el artefacto `ui-previews`.
+
+## Varios AdGuard y contador de avisos
+
+Configura un origen y réplicas en Ajustes para aplicar permisos y cambios en todos, con confirmación y restauración por servidor. [Guía de instalación y convivencia con adguard-sync](docs/adguard-multiservidor.md). El icono suma solicitudes pendientes y clientes con avisos nuevos; los intentos se agrupan por servicio durante 24 horas y el historial se conserva hasta 30 días.

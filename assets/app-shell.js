@@ -27,7 +27,7 @@
       let badge=nav.querySelector('[data-alert-count]');
       if(!badge){badge=make('span','','request-count');badge.dataset.alertCount='';nav.append(badge);}
       badge.textContent=unread>99?'99+':String(unread);badge.hidden=!unread;
-      nav.setAttribute('aria-label',unread?'Avisos, '+unread+' sin leer':'Avisos');
+      nav.setAttribute('aria-label',unread?'Actividad, '+unread+' clientes con avisos nuevos':'Actividad');
     }
     for (const badge of document.querySelectorAll('[data-request-count]')) {
       badge.textContent = count > 99 ? '99+' : String(count);

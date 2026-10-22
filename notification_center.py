@@ -4,6 +4,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 import auth, blocked_alerts
 
+GROUP_WINDOW = 86400
+
 # Push services identify the sender by this contact. Apple rejects the whole VAPID JWT (403 BadJwtToken)
 # when it names no real domain, e.g. localhost or mDNS ".local" names, so the default is a public origin.
 # py_vapid only accepts an https contact without a path, so the default is the bare project host.
@@ -105,6 +107,7 @@ class Center:
             auth.DB.execute('INSERT OR IGNORE INTO alert_meta VALUES(?,?)', ('started', str(clock())))
             self.started = float(auth.DB.execute("SELECT value FROM alert_meta WHERE key='started'").fetchone()[0])
             auth.DB.commit()
+        self.migrate_groups()
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import ec
         if not self.keyfile.exists():
@@ -116,6 +119,48 @@ class Center:
             except FileExistsError: pass
         key = serialization.load_pem_private_key(self.keyfile.read_bytes(), password=None)
         self.public_key = base64.urlsafe_b64encode(key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).rstrip(b'=').decode()
+
+    def migrate_groups(self):
+        """Add immutable 24h groups without deleting old alerts or changing requests."""
+        with auth.LOCK:
+            auth.DB.execute('CREATE TABLE IF NOT EXISTS alert_groups(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,client TEXT NOT NULL,service TEXT NOT NULL,created REAL NOT NULL,read_at REAL)')
+            if 'group_id' not in [r[1] for r in auth.DB.execute('PRAGMA table_info(alerts)')]:
+                auth.DB.execute('ALTER TABLE alerts ADD COLUMN group_id INTEGER')
+            auth.DB.execute('CREATE INDEX IF NOT EXISTS alert_groups_lookup ON alert_groups(user_id,client,service,created)')
+            auth.DB.execute('CREATE INDEX IF NOT EXISTS alerts_group ON alerts(group_id)')
+            for row in auth.DB.execute("SELECT * FROM alerts WHERE kind='blocked' AND group_id IS NULL ORDER BY created,id").fetchall():
+                group = self.group(row['user_id'],row['client'],row['service'],row['created'])
+                auth.DB.execute('UPDATE alerts SET group_id=? WHERE id=?',(group['id'],row['id']))
+                if row['read_at'] is not None:
+                    auth.DB.execute('UPDATE alert_groups SET read_at=COALESCE(read_at,?) WHERE id=?',(row['read_at'],group['id']))
+            auth.DB.execute("UPDATE alerts SET read_at=(SELECT read_at FROM alert_groups WHERE id=alerts.group_id) WHERE group_id IN (SELECT id FROM alert_groups WHERE read_at IS NOT NULL)")
+            auth.DB.commit()
+
+    def group(self, uid, client, service, created):
+        row = auth.DB.execute('SELECT * FROM alert_groups WHERE user_id=? AND client=? AND service=? AND created<=? AND created>? ORDER BY created DESC LIMIT 1',(uid,client,service,created,created-GROUP_WINDOW)).fetchone()
+        if row is None:
+            # A late query from the other DNS may precede the first observed query by seconds.
+            row=auth.DB.execute('SELECT * FROM alert_groups WHERE user_id=? AND client=? AND service=? AND created>? AND created<=? ORDER BY created LIMIT 1',(uid,client,service,created,created+120)).fetchone()
+        if row is None:
+            gid=auth.DB.execute('INSERT INTO alert_groups(user_id,client,service,created) VALUES(?,?,?,?)',(uid,client,service,created)).lastrowid
+            row=auth.DB.execute('SELECT * FROM alert_groups WHERE id=?',(gid,)).fetchone()
+        return row
+
+    def grouped(self, items):
+        groups={}
+        for item in items:
+            if item['kind']!='blocked' or item.get('group_id') is None: continue
+            groups.setdefault(item['group_id'],[]).append(item)
+        result=[]
+        for gid,members in groups.items():
+            group=auth.DB.execute('SELECT * FROM alert_groups WHERE id=?',(gid,)).fetchone()
+            if not group: continue
+            latest=max(members,key=lambda x:(x['created'],x['id']))
+            details=[json.loads(i['detail']) for i in members]
+            value=self.public(latest)
+            value.update(group_id=gid,first_seen=group['created'],last_seen=max(max(i['created'] for i in members),max(d.get('last_seen',0) for d in details)),expires=group['created']+GROUP_WINDOW,read_at=group['read_at'],is_new=group['read_at'] is None and group['created']<=self.clock()<group['created']+GROUP_WINDOW,attempts=sum(max(1,int(d.get('attempts',1))) for d in details),records=len(members))
+            result.append(value)
+        return sorted(result,key=lambda x:(x['is_new'],x['last_seen']),reverse=True)
 
     def user(self, uid):
         row = auth.DB.execute('SELECT * FROM users WHERE id=? AND active=1', (uid,)).fetchone()
@@ -150,13 +195,18 @@ class Center:
                 evaluated,excluded=blocked_alerts.evaluate(user,events,config,now=now)
                 eligible = {e['id'] for e in evaluated}
                 auth.DB.execute('INSERT OR REPLACE INTO alert_meta VALUES(?,?)', ('scan:'+str(user['id']),json.dumps({'time':now,'events_in_scope':sum(self.visible(user,e) for e in events),'eligible':len(eligible),'excluded':{k:v for k,v in excluded.items() if k!='not_blocked_or_outside_scope'}})))
-                for event in events:
+                for event in sorted(events,key=lambda e:(e['time'],e['id'])):
                     if event['kind'] != 'blocked' or not self.visible(user, event): continue
-                    if event['time'] < self.started or event['id'] not in eligible:
-                        reasons['history_preferences_or_cooldown'] = reasons.get('history_preferences_or_cooldown', 0) + 1
+                    source='block:'+hashlib.sha256(json.dumps([event[k] for k in ('time','client','service','domain')],ensure_ascii=False).encode()).hexdigest()
+                    detail={'domain':event['domain'],'attempts':event.get('attempts',1),'last_seen':event.get('last_seen',event['time']),'servers':event.get('server_names',event.get('servers',[]))}
+                    existing=auth.DB.execute('SELECT 1 FROM alerts WHERE user_id=? AND source=?',(user['id'],source)).fetchone()
+                    if existing:
+                        self.insert(user,source,'blocked',event['client'],event['service'],event['time'],detail)
                         continue
-                    source = 'block:' + hashlib.sha256(json.dumps([event[k] for k in ('time','client','service','domain')], ensure_ascii=False).encode()).hexdigest()
-                    made += self.insert(user, source, 'blocked', event['client'], event['service'], event['time'], {'domain': event['domain']})
+                    if event['time'] < self.started or event['id'] not in eligible:
+                        reasons['history_preferences_or_cooldown']=reasons.get('history_preferences_or_cooldown',0)+1
+                        continue
+                    made+=self.insert(user,source,'blocked',event['client'],event['service'],event['time'],detail)
                 if user['role'] == 'admin':
                     for row in auth.DB.execute('SELECT s.user_id,s.created,u.username FROM signups s JOIN users u ON u.id=s.user_id').fetchall():
                         if row['created'] >= self.started:
@@ -169,10 +219,20 @@ class Center:
             old = now-30*86400
             auth.DB.execute('DELETE FROM alert_deliveries WHERE alert_id IN (SELECT id FROM alerts WHERE created<?)', (old,))
             auth.DB.execute('DELETE FROM alerts WHERE created<?', (old,))
+            auth.DB.execute('DELETE FROM alert_groups WHERE id NOT IN (SELECT group_id FROM alerts WHERE group_id IS NOT NULL)')
             auth.DB.commit()
 
     def insert(self, user, source, kind, client, service, created, detail):
-        result = auth.DB.execute('INSERT OR IGNORE INTO alerts(user_id,source,kind,client,service,created,detail) VALUES(?,?,?,?,?,?,?)', (user['id'],source,kind,client,service,created,json.dumps(detail,ensure_ascii=False)))
+        old=auth.DB.execute('SELECT id,detail FROM alerts WHERE user_id=? AND source=?',(user['id'],source)).fetchone()
+        if old:
+            if kind=='blocked':
+                previous=json.loads(old['detail'])
+                detail['attempts']=max(previous.get('attempts',1),detail.get('attempts',1))
+                detail['last_seen']=max(previous.get('last_seen',created),detail.get('last_seen',created))
+                auth.DB.execute('UPDATE alerts SET detail=? WHERE id=?',(json.dumps(detail,ensure_ascii=False),old['id']))
+            return 0
+        group=self.group(user['id'],client,service,created) if kind=='blocked' else None
+        result = auth.DB.execute('INSERT INTO alerts(user_id,source,kind,client,service,created,detail,group_id,read_at) VALUES(?,?,?,?,?,?,?,?,?)', (user['id'],source,kind,client,service,created,json.dumps(detail,ensure_ascii=False),group['id'] if group else None,group['read_at'] if group else None))
         if result.rowcount:
             for device in auth.DB.execute('SELECT id FROM alert_devices WHERE user_id=?', (user['id'],)):
                 auth.DB.execute("INSERT OR IGNORE INTO alert_deliveries VALUES(?,?,'pending',0,?,'')", (result.lastrowid,device['id'],self.clock()))
@@ -221,7 +281,8 @@ class Center:
     def snapshot(self, user, device=None):
         with auth.LOCK:
             items = [dict(r) for r in auth.DB.execute('SELECT * FROM alerts WHERE user_id=? ORDER BY id DESC', (user['id'],)) if self.visible(user, r)]
-            unread = sum(i['kind'] == 'blocked' and i['read_at'] is None for i in items)
+            groups=self.grouped(items)
+            unread=len({g['client'] for g in groups if g['is_new']})
             requests = auth.requests_for(user)
             pending = sum(r['status'] == 'pending' for r in requests)
             found = auth.DB.execute('SELECT * FROM alert_devices WHERE id=? AND user_id=?', (device,user['id'])).fetchone() if device else None
@@ -235,7 +296,7 @@ class Center:
                 if last: diagnostic['last_delivery'] = dict(last)
             scan = auth.DB.execute('SELECT value FROM alert_meta WHERE key=?',('scan:'+str(user['id']),)).fetchone()
             diagnostic['scan'] = json.loads(scan[0]) if scan else {'status':'Todavía no se han recogido avisos para esta cuenta.'}
-            return {'items':[self.public(i) for i in items[:200]],'unread':unread,'pending_requests':pending,'badge':unread+pending,'requests':requests,'deliveries':candidates[:20], 'diagnostic':diagnostic,'public_key':self.public_key}
+            return {'items':[self.public(i) for i in items[:200]],'groups':groups[:200],'unread_groups':sum(g['is_new'] for g in groups),'unread':unread,'pending_requests':pending,'badge':unread+pending,'requests':requests,'deliveries':candidates[:20], 'diagnostic':diagnostic,'public_key':self.public_key}
 
     def public(self, item):
         detail = json.loads(item['detail'])
@@ -246,13 +307,20 @@ class Center:
 
     def read(self, user, body):
         identifier = body.get('id')
+        client = body.get('client')
+        if client is not None and (not isinstance(client,str) or not client or identifier is not None): raise ValueError('Cliente de avisos inválido')
         if identifier is not None and (type(identifier) is not int or identifier<=0): raise ValueError('Aviso inválido')
         with auth.LOCK:
             items = [dict(r) for r in auth.DB.execute('SELECT * FROM alerts WHERE user_id=?', (user['id'],)) if self.visible(user,r)]
             if identifier is not None and not any(i['id']==identifier for i in items): raise auth.Forbidden('Aviso no disponible para esta cuenta')
-            for item in items:
-                if identifier is None or item['id']==identifier:
-                    auth.DB.execute('UPDATE alerts SET read_at=COALESCE(read_at,?) WHERE id=?', (self.clock(),item['id']))
+            if client is not None and not any(i['client']==client and i['kind']=='blocked' for i in items): raise auth.Forbidden('Cliente fuera de ámbito')
+            selected=[i for i in items if (identifier is None or i['id']==identifier) and (client is None or (i['kind']=='blocked' and i['client']==client))]
+            gids={i['group_id'] for i in selected if i.get('group_id') is not None}
+            for gid in gids:
+                auth.DB.execute('UPDATE alert_groups SET read_at=COALESCE(read_at,?) WHERE id=? AND user_id=?',(self.clock(),gid,user['id']))
+                auth.DB.execute('UPDATE alerts SET read_at=COALESCE(read_at,?) WHERE group_id=? AND user_id=?',(self.clock(),gid,user['id']))
+            for item in selected:
+                auth.DB.execute('UPDATE alerts SET read_at=COALESCE(read_at,?) WHERE id=?', (self.clock(),item['id']))
             auth.DB.commit()
         return {'ok':True}
 
