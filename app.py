@@ -1732,7 +1732,11 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 self.respond(200, result)
         except adguard_group.GroupError as e:
-            self.respond(502, {'error': str(e), 'servers': e.states})
+            if user['role'] == 'admin':
+                self.respond(502, {'error': str(e), 'servers': e.states})
+            else:
+                message = 'No se confirmó el cambio en todos los AdGuard.'
+                self.respond(502, {'error': message + ' Pide al administrador que revise el grupo.'})
         except nintendo.NintendoError as e:
             data = {'error': str(e)}
             if self.path in ('/api/permit', '/api/cancel', '/api/nintendo/policy') and 'op' in locals():
