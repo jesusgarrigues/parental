@@ -19,6 +19,7 @@ state.requests=requests;
 const user={id:1,username:'admin',avatar:'face-01',role:'admin',clients:[],edit_policy:true,max_minutes:1440};
 let authenticEnabled=false,authenticLinked=false,authenticPending=null;const authenticConfig={enabled:false,issuer:'',discovery_url:'',client_id:'',public_url:'',secret_set:false,callback_url:''};
 const alertPreferences={mode:'all',services:[],protections:[],cooldown_minutes:5,clients:{}};let alertsFailure=false;
+let serverConfig={url:'http://192.168.1.2:3000',username:'admin',demo:true,replicas:[]};
 let inboxGroups=null,inboxItems=[],inboxUnread=0,deliveryAccepted=false,deliveryDue=true,deliveryAttempts=0,autoNotifyCalls=0;
 // Serve the page with the exact CSP app.py sends, so any violation fails the browser test.
 const csp=require('node:child_process').execFileSync('python3',['-c','import sys,security;print(security.content_security_policy(open(sys.argv[1]).read()),end="")',root+'/index.html'],{cwd:root,encoding:'utf8'});
@@ -63,7 +64,9 @@ const calls=[];let adguardDown=false,clientFailure=null,readFailures=0,saveDelay
     native.devices[0].last_operation={...previous,operation_id:body.operation_id,status:'superseded',message:'Seguimiento cerrado sin reenviar tiempo.'};
     return route.fulfill({contentType:'application/json',body:JSON.stringify(native.devices[0].last_operation)});
    }
-   const data=path==='me'?{user,csrf:'fixture-csrf'}:path==='state'?state:path==='nintendo/state'?native:path==='requests'?{requests}:path==='auth/status'?{configured:true}:path==='nintendo/config'?{configured:true,timezone:'Europe/Madrid'}:path==='server'?{url:'http://192.168.1.2:3000',username:'admin',demo:true}:path==='diagnostics'?{entries:[]}:path==='users'?{users:[user,{id:9,username:'lucia',email:'lucia@example.test',role:'solicitante',clients:[],edit_policy:false,max_minutes:120,active:false,avatar:'',authentik_linked:true,signup_pending:true,signup_created:Date.now()/1000,has_password:false}]}:path==='devices'?{devices:clients.map(c=>({key:c.name,name:c.name,provider:'adguard'}))}:body?{ok:true,status:['permit','cancel','nintendo/policy'].includes(path)?'confirmed':undefined}:{ok:true};
+   if(path==='server'&&body){serverConfig={...body,has_password:!!body.password,replicas:(body.replicas||[]).map((node,i)=>({...node,id:node.id||'node-browser-replica-'+i,has_password:!!node.password}))};delete serverConfig.password;for(const node of serverConfig.replicas)delete node.password;return route.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,version:'Origen y réplica comprobados'})});}
+   if(path==='server/test')return route.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,version:'Origen y réplica comprobados'})});
+   const data=path==='me'?{user,csrf:'fixture-csrf'}:path==='state'?state:path==='nintendo/state'?native:path==='requests'?{requests}:path==='auth/status'?{configured:true}:path==='nintendo/config'?{configured:true,timezone:'Europe/Madrid'}:path==='server'?serverConfig:path==='diagnostics'?{entries:[]}:path==='users'?{users:[user,{id:9,username:'lucia',email:'lucia@example.test',role:'solicitante',clients:[],edit_policy:false,max_minutes:120,active:false,avatar:'',authentik_linked:true,signup_pending:true,signup_created:Date.now()/1000,has_password:false}]}:path==='devices'?{devices:clients.map(c=>({key:c.name,name:c.name,provider:'adguard'}))}:body?{ok:true,status:['permit','cancel','nintendo/policy'].includes(path)?'confirmed':undefined}:{ok:true};
    return route.fulfill({contentType:'application/json',body:JSON.stringify(data)});
   }
   if(url.pathname==='/')return route.fulfill({contentType:'text/html',headers:{'Content-Security-Policy':csp},body:fs.readFileSync(root+'/index.html','utf8')});
@@ -408,7 +411,11 @@ const calls=[];let adguardDown=false,clientFailure=null,readFailures=0,saveDelay
  await page.getByLabel('Nombre de la réplica',{exact:true}).fill('AdGuard secundario');await page.getByLabel('URL de la réplica',{exact:true}).fill('http://replica.test:8053');await page.getByLabel('Usuario de la réplica',{exact:true}).fill('admin');await page.getByLabel('Contraseña de la réplica',{exact:true}).fill('private-test-only');await page.locator('#s-demo').uncheck();await page.locator('#s-sync-ack').check();
  for(const width of [320,375,390,430]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Replica settings overflow at '+width);}
  // Do not retain credentials in review screenshots.
- await page.getByLabel('Contraseña de la réplica',{exact:true}).fill('');await page.screenshot({path:shots+'/movil-dos-adguard.png',fullPage:true});await page.evaluate(()=>{dirty=false;});
+ await page.getByLabel('Contraseña de la réplica',{exact:true}).fill('');await page.screenshot({path:shots+'/movil-dos-adguard.png',fullPage:true});
+ await page.getByRole('button',{name:'Guardar servidor',exact:true}).click();await page.waitForFunction(()=>!busy&&document.querySelector('#server-feedback').textContent.includes('Grupo guardado'));
+ await page.getByLabel('Nombre de la réplica',{exact:true}).fill('AdGuard secundario actualizado');await page.getByRole('button',{name:'Guardar servidor',exact:true}).click();await page.waitForFunction(()=>!busy);
+ const serverSaves=calls.filter(c=>c.path==='server'&&c.body);assert.equal(serverSaves.at(-1).body.replicas[0].id,'node-browser-replica-0','The generated replica id survives subsequent saves');
+ await page.evaluate(()=>{dirty=false;});
  await page.setViewportSize({width:1440,height:1000});
  await page.evaluate(async()=>{
   token='';for(const n of document.body.children)n.style.display='none';document.body.style.display='block';document.body.style.padding='32px';
