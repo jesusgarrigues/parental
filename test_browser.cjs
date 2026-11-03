@@ -88,7 +88,11 @@ const calls=[];let adguardDown=false,clientFailure=null,readFailures=0,saveDelay
  assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement).colorScheme),'light');
  assert.equal(await page.locator('[data-client-card]').count(),10);
  assert.equal(await page.locator('[data-client-card] .service-detail').count(),0);
+ const hostileFrom=errors.length;
  const sanitizer=await page.evaluate(()=>{const source='<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" onload="window.bad=1"><script>window.bad=1</script><foreignObject><div>evil</div></foreignObject><path d="M0 0h2v2z" fill="url(https://evil.test/a)" style="fill:red" onclick="window.bad=2" xlink:href="https://evil.test/a"/><image href="https://evil.test/a"/></svg>';const svg=safeServiceSvg(source);return {markup:svg?.outerHTML,bad:window.bad||null,base64:!!safeServiceSvg(btoa('<svg><path d="M0 0h1v1z"/></svg>'))}});
+ await page.waitForTimeout(300);
+ // Las versiones recientes de Chromium avisan del CSP al analizar el SVG hostil de esta prueba (onload, onclick); solo esos avisos se descartan.
+ errors.splice(hostileFrom,errors.length-hostileFrom,...errors.slice(hostileFrom).filter(e=>!/^CSP: Executing inline event handler/.test(e)));
  assert.ok(sanitizer.base64);assert.equal(sanitizer.bad,null);assert.ok(!/script|foreignObject|onload|onclick|href|style=|url\(/.test(sanitizer.markup));
  await page.screenshot({path:shots+'/desktop-clientes.png',fullPage:true});
  await page.locator('[data-client-card="iMac de Emma"]').click();
