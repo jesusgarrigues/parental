@@ -10,6 +10,8 @@ Parental admite un origen y hasta tres réplicas. Cada servidor conserva su URL 
 4. Prepara las exclusiones de adguard-sync que se indican abajo y confirma la casilla correspondiente. Guarda el grupo. La conexión de un solo servidor sigue siendo válida sin activar réplicas.
 5. En Clientes consulta **Estado por servidor** y verifica que cada dispositivo está vinculado en ambos. Los clientes creados fuera de Parental deben existir con los mismos identificadores en las réplicas antes de concederles permisos. Los clientes creados desde Parental se dan de alta en todo el grupo.
 
+Los horarios de servicios bloqueados guardan una zona horaria (`Local`, `UTC`, `Europe/Madrid`…) que cada AdGuard resuelve a su manera. Si un horario no tiene franjas, esa zona no cuenta como diferencia de política. Si tiene franjas, deben coincidir en todos los servidores: fija la misma zona explícita en cada uno. Si un alta de cliente se cruza con la copia de `adguard-sync` y el cliente ya existe en la réplica con los mismos identificadores, Parental lo actualiza en lugar de dejar el guardado pendiente.
+
 Para añadir, eliminar o cambiar URLs de servidores deben haber finalizado las concesiones y restauraciones pendientes. No se eliminan permisos para permitir ese cambio. En un grupo existente se pueden corregir credenciales sin cambiar su topología para recuperar una API inaccesible. Usuarios, solicitudes, avatares y ámbitos de la instalación se conservan.
 
 ## Convivencia con adguard-sync
