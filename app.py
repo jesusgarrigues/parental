@@ -1388,7 +1388,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 security.log_failure('Authentik: fallo interno al completar el acceso')
                 return self.respond(
-                    502, {'error': 'No se pudo completar Authentik. Vuelve a Parental e inicia de nuevo'}
+                    503, {'error': 'No se pudo completar Authentik. Vuelve a Parental e inicia de nuevo'}
                 )
         user = self.user()
         if not user:
@@ -1460,16 +1460,16 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(200, scoped_state(user))
             self.respond(404, {'error': 'No encontrado'})
         except nintendo.NintendoError as e:
-            self.respond(502, {'error': str(e)})
+            self.respond(503, {'error': str(e)})
         except oidc.OIDCError as e:
             self.respond(400, {'error': str(e)})
         except auth.Forbidden as e:
             self.respond(403, {'error': str(e)})
         except AdGuardError as e:
-            self.respond(502, {'error': str(e), 'diagnostic': e.detail})
+            self.respond(503, {'error': str(e), 'diagnostic': e.detail})
         except Exception:
             security.log_failure('GET ' + urlsplit(self.path).path)
-            self.respond(502, {'error': 'No se puede leer AdGuard. Revisa el diagnóstico en Servidor.'})
+            self.respond(503, {'error': 'No se puede leer AdGuard. Revisa el diagnóstico en Servidor.'})
 
     def do_POST(self):
         try:
@@ -1733,10 +1733,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, result)
         except adguard_group.GroupError as e:
             if user['role'] == 'admin':
-                self.respond(502, {'error': str(e), 'servers': e.states})
+                self.respond(503, {'error': str(e), 'servers': e.states})
             else:
                 message = 'No se confirmó el cambio en todos los AdGuard.'
-                self.respond(502, {'error': message + ' Pide al administrador que revise el grupo.'})
+                self.respond(503, {'error': message + ' Pide al administrador que revise el grupo.'})
         except nintendo.NintendoError as e:
             data = {'error': str(e)}
             if self.path in ('/api/permit', '/api/cancel', '/api/nintendo/policy') and 'op' in locals():
@@ -1747,17 +1747,17 @@ class Handler(BaseHTTPRequestHandler):
                         data['operation'] = operation
                 except Exception:
                     pass
-            self.respond(502, data)
+            self.respond(503, data)
         except auth.Forbidden as e:
             self.respond(403, {'error': str(e)})
         except AdGuardError as e:
-            self.respond(502, {'error': str(e), 'diagnostic': e.detail})
+            self.respond(503, {'error': str(e), 'diagnostic': e.detail})
         except (ValueError, KeyError, TypeError) as e:
             self.respond(400, {'error': str(e)})
         except Exception:
             security.log_failure('POST ' + urlsplit(self.path).path)
             self.respond(
-                502, {'error': 'La operación no se pudo completar. Revisa solicitudes y permisos antes de reintentar.'}
+                503, {'error': 'La operación no se pudo completar. Revisa solicitudes y permisos antes de reintentar.'}
             )
 
 

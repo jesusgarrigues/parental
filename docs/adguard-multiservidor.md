@@ -8,7 +8,7 @@ Parental admite un origen y hasta tres réplicas. Cada servidor conserva su URL 
 2. En **Ajustes → Integraciones → AdGuard → Conexión**, conserva el origen y añade una réplica con su URL web completa, por ejemplo `http://192.168.1.3:8053`. Introduce sus propias credenciales. Una contraseña vacía conserva la ya guardada; no se muestra al navegador.
 3. Pulsa **Probar conexión**. El contenedor debe alcanzar las dos APIs, incluidas rutas del host o de la VPN si se utilizan. Que tu teléfono alcance ambos AdGuard no demuestra conectividad desde Docker.
 4. Prepara las exclusiones de adguard-sync que se indican abajo y confirma la casilla correspondiente. Guarda el grupo. La conexión de un solo servidor sigue siendo válida sin activar réplicas.
-5. En Clientes consulta **Estado por servidor** y verifica que cada dispositivo está vinculado en ambos. Los clientes creados fuera de Parental deben existir con los mismos identificadores en las réplicas antes de concederles permisos. Los clientes creados desde Parental se dan de alta en todo el grupo.
+5. En Clientes consulta **Estado por servidor** y verifica que cada dispositivo está vinculado en ambos. Si un cliente del origen aún no existe en una réplica (por ejemplo, creado en AdGuard antes de que `adguard-sync` lo copie), Parental lo copia del origen antes de guardar o conceder, después de leer todos los servidores. Si la réplica tiene otro cliente con el mismo nombre o con alguno de sus identificadores, no escribe nada y lo muestra como conflicto. Los clientes creados desde Parental se dan de alta en todo el grupo.
 
 Los horarios de servicios bloqueados guardan una zona horaria (`Local`, `UTC`, `Europe/Madrid`…) que cada AdGuard resuelve a su manera. Si un horario no tiene franjas, esa zona no cuenta como diferencia de política. Si tiene franjas, deben coincidir en todos los servidores: fija la misma zona explícita en cada uno. Si un alta de cliente se cruza con la copia de `adguard-sync` y el cliente ya existe en la réplica con los mismos identificadores, Parental lo actualiza en lugar de dejar el guardado pendiente.
 
@@ -61,3 +61,7 @@ Cada lectura obtiene hasta 500 consultas por servidor. Mucho tráfico, caché DN
 El icono suma **solicitudes pendientes + clientes con avisos nuevos**. Los avisos se agrupan por cliente y servicio durante 24 horas desde la primera detección; las repeticiones no reinician esa ventana. El historial se conserva hasta 30 días. Consulta [la guía de avisos](avisos-bloqueos.md).
 
 Las pruebas automatizadas usan dos APIs independientes, fallos parciales y recuperación. No sustituyen la validación de conectividad, exclusiones y resolución DNS en tu propia infraestructura.
+
+## Errores a través de un proxy
+
+Los fallos de AdGuard o del grupo se devuelven con HTTP 503 y un JSON con el motivo. No se usa 502: Cloudflare y otros proxies sustituyen esa respuesta por su propia página y la interfaz solo podría mostrar un error genérico.
