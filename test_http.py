@@ -70,9 +70,9 @@ try:
     rid=child.call('request',{'client':'iMac de Emma','service':'youtube','minutes':20,'reason':'Vídeo de clase'})['id']
     assert admin.call('state')['leases']==[]
     parent=Client();parent.call('auth/login',{'username':'parent','password':'parent-password-1234'})
-    private_error=parent.call('permit',{'client':'iMac de Emma','service':'youtube','minutes':19},502)
+    private_error=parent.call('permit',{'client':'iMac de Emma','service':'youtube','minutes':19},503)
     assert 'private-other-client' not in json.dumps(private_error) and 'servers' not in private_error
-    admin_error=admin.call('permit',{'client':'iMac de Emma','service':'youtube','minutes':19},502)
+    admin_error=admin.call('permit',{'client':'iMac de Emma','service':'youtube','minutes':19},503)
     assert admin_error['servers'][0]['client']=='private-other-client'
     alert_device='http-device-1234567890'
     admin.call('me/alerts/device',{'device':alert_device})

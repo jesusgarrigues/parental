@@ -109,7 +109,7 @@ class Group:
         key = identity(canonical)
         matches = [c for c in clients if key and identity(c) == key]
         if len(matches) != 1:
-            raise GroupError('Cliente ausente o identificadores incompatibles: ' + canonical['name'])
+            raise GroupError('Cliente ausente o con nombre o identificadores en conflicto en este servidor: ' + canonical['name'])
         return copy.deepcopy(matches[0])
 
     def logical_name(self, local, origin_clients):
@@ -127,12 +127,33 @@ class Group:
     def pending(self):
         return bool(self.a.DB.execute("SELECT 1 FROM ag_changes WHERE status='pending'").fetchone())
 
+    def provision(self, canonical, nodes):
+        """Copy an origin client to replicas that still lack it, e.g. created in AdGuard before adguard-sync ran.
+
+        Every replica is read before any write. A replica with the same name or any shared identifier is a real
+        conflict: nothing is written and match() reports it."""
+        key, missing = identity(canonical), []
+        for node in nodes[1:]:
+            clients = self.read(node, 'clients')['clients']
+            if not key or any(identity(c) == key for c in clients):
+                continue
+            if any(c['name'] == canonical['name'] or identity(c) & key for c in clients):
+                continue
+            missing.append(node)
+        for node in missing:
+            self.call(node, 'clients/add', copy.deepcopy(canonical))
+            self.status(node, client=canonical['name'], operation='cliente copiado del origen', error='')
+
     def preflight(self, name, consistent=False):
         nodes = self.nodes()
         origin = self.read(nodes[0], 'clients')['clients']
         canonical = next((c for c in origin if c['name'] == name), None)
         if canonical is None:
             raise GroupError('Cliente desconocido en el origen')
+        try:
+            self.provision(canonical, nodes)
+        except Exception:
+            pass  # The checks below read every server again and report the failure.
         result, policy = [], None
         for node in nodes:
             try:

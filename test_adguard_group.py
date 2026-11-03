@@ -82,13 +82,37 @@ class GroupTests(unittest.TestCase):
         self.clients['node-replica'][0]['name']='Emma réplica'
         self.grant();self.assertEqual(self.clients['node-replica'][0]['name'],'Emma réplica')
         self.expire();self.clients['node-replica'][0]['ids']=['192.168.99.99']
-        with self.assertRaises(adguard_group.GroupError):self.grant()
-
-    def test_missing_replica_client_and_policy_difference_do_not_mutate(self):
-        self.clients['node-replica'].pop(0)
+        # The origin identifiers no longer exist in the replica: the client is copied, the unrelated alias is kept.
+        self.assertEqual(self.grant()['status'],'confirmed')
+        self.assertEqual([c['name'] for c in self.clients['node-replica'] if c['ids']==['192.168.99.99']],['Emma réplica'])
+        self.expire()
+        self.clients['node-replica']=[c for c in self.clients['node-replica'] if c['ids']!=['192.168.1.20']]
+        self.clients['node-replica'][0]['name']='iMac de Emma';self.writes.clear()
         with self.assertRaises(adguard_group.GroupError):self.grant()
         self.assertEqual(self.writes,[])
-        self.clients['node-replica']=copy.deepcopy(self.clients['origin'])
+
+    def test_missing_replica_client_is_copied_from_origin_before_granting(self):
+        self.clients['node-replica'].pop(0)
+        self.assertEqual(self.grant()['status'],'confirmed')
+        self.assertEqual(self.writes[0][:2],('node-replica','clients/add'))
+        self.assertEqual(sum(c['name']=='iMac de Emma' for c in self.clients['node-replica']),1)
+        self.expire()
+        for clients in self.clients.values():self.assertTrue(clients[0]['use_global_blocked_services'])
+
+    def test_missing_replica_client_with_conflicting_name_or_ids_is_not_written(self):
+        self.clients['node-replica'][0]['ids']=['192.168.99.99']
+        with self.assertRaises(adguard_group.GroupError):self.grant()
+        self.assertEqual(self.writes,[])
+        self.clients['node-replica'][0].update(name='Otro',ids=['192.168.1.20','192.168.1.77'])
+        with self.assertRaises(adguard_group.GroupError):self.grant()
+        self.assertEqual(self.writes,[])
+
+    def test_missing_replica_client_while_another_replica_is_down_writes_nothing(self):
+        self.clients['node-replica'].pop(0);self.offline.add('node-replica')
+        with self.assertRaises(adguard_group.GroupError):self.grant()
+        self.assertEqual(self.writes,[])
+
+    def test_policy_difference_does_not_mutate(self):
         self.values['node-replica']['blocked_services']['ids']=['youtube']
         with self.assertRaises(adguard_group.GroupError):self.grant()
         self.assertEqual(self.writes,[])

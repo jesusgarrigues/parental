@@ -104,7 +104,7 @@ class NintendoRoutes(unittest.TestCase):
     def test_failed_preflight_does_not_invent_an_uncertain_operation(self):
         h=self.handler(self.parent,'/api/permit',{'client':'nintendo:switch1','service':'@nintendo','minutes':20,'operation_id':'a'*32})
         with patch.object(app.NINTENDO,'grant',side_effect=app.nintendo.NintendoError('No hay datos actuales')),patch.object(app.NINTENDO,'operation_status',return_value=None):h.do_POST()
-        self.assertEqual(h.respond.call_args.args[0],502)
+        self.assertEqual(h.respond.call_args.args[0],503)
         self.assertIs(h.respond.call_args.args[1]['operation_started'],False)
     def test_recorded_pending_operation_not_disguised_as_unsent(self):
         h=self.handler(self.parent,'/api/permit',{'client':'nintendo:switch1','service':'@nintendo','minutes':20,'operation_id':'a'*32})
