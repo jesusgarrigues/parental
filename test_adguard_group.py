@@ -131,6 +131,41 @@ class GroupTests(unittest.TestCase):
         for clients in self.clients.values():
             self.assertEqual(clients[0]['blocked_services'],['youtube','twitch']);self.assertTrue(clients[0]['ignore_statistics'])
 
+    def test_empty_schedule_time_zone_is_not_a_policy_difference(self):
+        for key,zone in (('origin','Local'),('node-replica','Europe/Madrid')):
+            self.clients[key][0]['blocked_services_schedule']={'time_zone':zone}
+            self.values[key]['blocked_services']['schedule']={'time_zone':zone}
+        self.assertEqual(self.grant()['status'],'confirmed')
+        self.expire()
+        for clients in self.clients.values():self.assertTrue(clients[0]['use_global_blocked_services'])
+
+    def test_schedule_with_times_still_blocks_when_servers_differ(self):
+        day={'mon':{'start':0,'end':3600000}}
+        self.clients['origin'][0]['blocked_services_schedule']=dict(day,time_zone='Local')
+        self.clients['node-replica'][0]['blocked_services_schedule']={'time_zone':'Local'}
+        self.clients['origin'][0]['use_global_blocked_services']=False
+        self.clients['node-replica'][0]['use_global_blocked_services']=False
+        with self.assertRaises(adguard_group.GroupError):self.grant()
+        self.assertEqual(self.writes,[])
+
+    def test_add_finds_client_copied_meanwhile_by_sync_and_completes(self):
+        patch_={'name':'Nuevo','ids':['192.168.1.50'],**{k:v for k,v in app.DEMO_CLIENTS[0].items() if k not in ('name','ids')}}
+        copied=dict(copy.deepcopy(patch_),ignore_statistics=True)
+        self.clients['node-replica'].append(copied)
+        targets={key:{'before':{},'desired':patch_} for key in ('origin','node-replica')}
+        app.ADGUARDS.journal('Nuevo','add',targets)
+        self.assertFalse(app.ADGUARDS.pending())
+        for key in ('origin','node-replica'):
+            self.assertEqual(sum(c['name']=='Nuevo' for c in self.clients[key]),1)
+            self.assertFalse(next(c for c in self.clients[key] if c['name']=='Nuevo')['ignore_statistics'])
+
+    def test_add_with_same_name_and_other_identifiers_still_fails_and_stays_pending(self):
+        patch_={'name':'Nuevo','ids':['192.168.1.50'],**{k:v for k,v in app.DEMO_CLIENTS[0].items() if k not in ('name','ids')}}
+        self.clients['node-replica'].append(dict(copy.deepcopy(patch_),ids=['192.168.1.99']))
+        targets={key:{'before':{},'desired':patch_} for key in ('origin','node-replica')}
+        with self.assertRaises(adguard_group.GroupError):app.ADGUARDS.journal('Nuevo','add',targets)
+        self.assertTrue(app.ADGUARDS.pending())
+
     def test_global_save_verified_on_both_and_retry_is_persistent(self):
         self.reject.add('node-replica')
         with self.assertRaises(adguard_group.GroupError):app.save_global({'parental_enabled':False})

@@ -23,10 +23,18 @@ def identity(client):
     return frozenset(values)
 
 
+def schedule(value):
+    """An empty schedule has no times to shift, so its time zone ('Local' or a resolved name) is not a policy."""
+    return {} if isinstance(value, dict) and set(value) <= {'time_zone'} else value
+
+
 def equivalent(current, expected):
     for key, value in expected.items():
         actual = current.get(key)
-        if key in ('ids', 'tags', 'blocked_services') and isinstance(value, list):
+        if key == 'blocked_services_schedule':
+            if schedule(actual or {}) != schedule(value):
+                return False
+        elif key in ('ids', 'tags', 'blocked_services') and isinstance(value, list):
             if sorted(actual or []) != sorted(value):
                 return False
         elif actual != value:
@@ -134,6 +142,7 @@ class Group:
                 effective = self.a.effective(base, globals_)
                 signature = copy.deepcopy(effective)
                 signature['blocked_services'] = sorted(signature['blocked_services'])
+                signature['blocked_services_schedule'] = schedule(signature.get('blocked_services_schedule', {}))
                 if consistent and policy is not None and signature != policy:
                     raise GroupError('La configuración base del cliente difiere entre servidores; revisa los ajustes antes de conceder tiempo')
                 policy = signature
@@ -273,10 +282,10 @@ class Group:
                         self.save_baseline(name,key,baseline)
                     current = next((c for c in clients if c['name'] == desired['name']), None)
                     if current is None or not equivalent(current, desired):
-                        if kind == 'add':
-                            if current is not None:
-                                raise GroupError('El nombre existe con otros identificadores')
+                        if kind == 'add' and current is None:
                             self.call(node, 'clients/add', desired)
+                        elif kind == 'add' and identity(current) != identity(desired):
+                            raise GroupError('El nombre existe con otros identificadores')
                         else:
                             self.call(node, 'clients/update', {'name': current['name'] if current else target['before']['name'], 'data': desired})
                     confirmed = next((c for c in self.read(node, 'clients')['clients'] if c['name'] == target['desired']['name']), {})
