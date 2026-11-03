@@ -79,6 +79,8 @@ const calls=[];let adguardDown=false,clientFailure=null,readFailures=0,saveDelay
  });
  const page=await context.newPage();page.setDefaultTimeout(10000);const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(/Content Security Policy/i.test(m.text()))errors.push('CSP: '+m.text());});
  await page.goto('https://preview.local/');await page.locator('[data-client-card]').first().waitFor();
+ const openFaces=async()=>{const menu=page.locator('details',{has:page.getByText('Cambiar cara',{exact:true})});if(!(await menu.evaluate(e=>e.open)))await page.getByText('Cambiar cara',{exact:true}).click()};
+ {const menu=page.locator('#main details').first();await menu.waitFor();await menu.locator('summary').first().click();assert.equal(await menu.evaluate(e=>e.open),true);await page.evaluate(()=>render());assert.equal(await page.locator('#main details').first().evaluate(e=>e.open),true,'un desplegable abierto se cierra al refrescar')}
  assert.equal(await page.title(),'Parental');
  assert.equal(await page.locator('.desktop-nav [data-request-count]').innerText(),'1');
  await page.waitForFunction(()=>document.querySelector('.brand img').complete);
@@ -283,7 +285,7 @@ const calls=[];let adguardDown=false,clientFailure=null,readFailures=0,saveDelay
  assert.ok(await page.getByRole('button',{name:'Conexión de AdGuard ›',exact:true}).isVisible());await page.getByRole('button',{name:'Conexión de AdGuard ›',exact:true}).click();await page.locator('#s-url').waitFor();
  // Avatars, independent integrations, permission feedback and brand artwork.
  await page.evaluate(()=>go('settings'));
- await page.getByText('Cambiar cara',{exact:true}).click();
+ await openFaces();
  await page.locator('[data-avatar="face-06"]').click();
  await page.getByRole('button',{name:'Guardar cara',exact:true}).click();
  await page.getByText('Cara guardada.',{exact:true}).waitFor();
@@ -309,7 +311,7 @@ const calls=[];let adguardDown=false,clientFailure=null,readFailures=0,saveDelay
  adguardDown=false;await page.goto('https://preview.local/?view=requests#request=1');
  await page.locator('[data-request-id="1"].notification-target').waitFor();
  assert.ok(await page.getByRole('button',{name:'Aprobar 20 min',exact:true}).isVisible());assert.ok(!page.url().includes('#request='));
- await page.evaluate(()=>go('settings'));await page.getByText('Cambiar cara',{exact:true}).click();await page.locator('[data-avatar="face-07"]').click();
+ await page.evaluate(()=>go('settings'));await openFaces();await page.locator('[data-avatar="face-07"]').click();
  page.once('dialog',d=>d.dismiss());await page.evaluate(()=>navigateNotification({kind:'request',id:1}));assert.equal(await page.evaluate(()=>page),'settings');assert.equal(await page.evaluate(()=>dirty),true);
  page.once('dialog',d=>d.accept());await page.evaluate(()=>navigateNotification({kind:'request',id:1}));await page.locator('[data-request-id="1"].notification-target').waitFor();
  await page.evaluate(()=>navigator.serviceWorker.dispatchEvent(new MessageEvent('message',{data:{type:'parental:navigate',target:{kind:'client',client:'iMac de Emma',service:'youtube'}}})));
@@ -359,7 +361,7 @@ const calls=[];let adguardDown=false,clientFailure=null,readFailures=0,saveDelay
  await authPanel.locator('input[type=checkbox]').first().check();assert.equal(await authPanel.locator('input[type=checkbox]').nth(1).isChecked(),false);
  assert.equal(await authPanel.getByLabel('Redirect URI para copiar en Authentik',{exact:true}).inputValue(),'https://preview.local/api/auth/oidc/callback');
  // Saving the avatar must not mark an unsaved identity configuration as clean.
- await page.getByText('Cambiar cara',{exact:true}).click();await page.locator('[data-avatar="face-07"]').click();
+ await openFaces();await page.locator('[data-avatar="face-07"]').click();
  await page.getByRole('button',{name:'Guardar cara',exact:true}).click();await page.getByText('Cara guardada.',{exact:true}).waitFor();
  assert.equal(await page.evaluate(()=>dirty),true);
  await authPanel.getByRole('button',{name:'Guardar Authentik',exact:true}).click();
@@ -370,7 +372,7 @@ const calls=[];let adguardDown=false,clientFailure=null,readFailures=0,saveDelay
  await page.evaluate(()=>go('settings'));await page.getByRole('button',{name:'Vincular estas cuentas',exact:true}).waitFor();
  await page.getByRole('button',{name:'Vincular estas cuentas',exact:true}).click();await page.getByText('Vinculado con adulto-authentik',{exact:true}).waitFor();
  assert.ok(calls.some(c=>c.path==='me/authentik/confirm'&&c.body.confirmation==='fixture-confirmation'));
- await page.getByText('Cambiar cara',{exact:true}).click();
+ await openFaces();
  await page.getByLabel('Categoría de imágenes',{exact:true}).selectOption('Animales');
  assert.equal(await page.locator('.avatar-options [data-avatar^=animal]:visible').count(),24);
  await page.getByLabel('Buscar imagen de usuario',{exact:true}).fill('Unicornio');await page.locator('[data-avatar="animal-24"]').click();
