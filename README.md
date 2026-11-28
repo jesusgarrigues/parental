@@ -52,6 +52,7 @@ No uses `docker compose down -v`: borraría cuentas, permisos y conexiones. Si v
 | Diagnóstico de conexión con AdGuard | [diagnostico.md](docs/diagnostico.md) |
 | Iconos, imágenes y acceso con Authentik | [iconos-y-authentik.md](docs/iconos-y-authentik.md) · [Authentik](docs/authentik.md) |
 | Publicar la imagen en Docker Hub | [publicacion.md](docs/publicacion.md) |
+| Registro de incidencias: problema, causa y solución | [incidencias.md](docs/incidencias.md) |
 | Migrar desde adguard-familia | [migracion-adguard-familia.md](docs/migracion-adguard-familia.md) |
 
 ## Desarrollo y demostración
