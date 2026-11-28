@@ -2,7 +2,7 @@
 
 Validación con una consola real: [nintendo-validacion-real.md](nintendo-validacion-real.md). [Volver al README](../README.md).
 
-Esta integración conecta directamente con Nintendo Switch Parental Controls; no necesita Home Assistant. Se implementa mediante `pynintendoparental==2.6.3`, una biblioteca no oficial. Depende de la nube de Nintendo y la consola necesita Internet para sincronizar. No se incluyen integraciones asistidas.
+Esta integración conecta directamente con Nintendo Switch Parental Controls; no necesita Home Assistant. Se implementa mediante `pynintendoparental==2.7.1`, una biblioteca no oficial. Depende de la nube de Nintendo y la consola necesita Internet para sincronizar. No se incluyen integraciones asistidas.
 
 1. Entra como administrador y abre **Ajustes → Integraciones → Nintendo**.
 2. Pulsa **Conectar Nintendo**. Se abre el inicio de sesión de la cuenta oficial; la contraseña no se introduce en esta app.
