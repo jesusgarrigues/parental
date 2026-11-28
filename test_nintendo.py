@@ -1108,5 +1108,19 @@ class SDKAdapterTests(unittest.TestCase):
             self.assertIsNotNone(snapshot['remaining_minutes'])
 
 
+class SafeErrorTests(unittest.TestCase):
+    def test_update_required_asks_for_new_image_not_reconnect(self):
+        class HttpException(Exception):
+            status_code, error_code = 400, 'update_required'
+        message = nintendo._safe_error(HttpException('HTTP 400: secreto (update_required)'))
+        self.assertIn('Actualiza la imagen Docker', message)
+        self.assertNotIn('secreto', message)
+
+    def test_other_400_still_asks_to_reconnect(self):
+        class HttpException(Exception):
+            status_code, error_code = 400, 'invalid_grant'
+        self.assertIn('Vuelve a conectar', nintendo._safe_error(HttpException()))
+
+
 if __name__ == '__main__':
     unittest.main()

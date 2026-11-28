@@ -46,6 +46,9 @@ def _safe_error(error):
         return str(error)
     status = getattr(error, 'status_code', None)
     name = type(error).__name__
+    # Nintendo rejects outdated app versions; reconnecting the account does not help.
+    if getattr(error, 'error_code', None) == 'update_required':
+        return 'Nintendo exige una versión más reciente de la integración. Actualiza la imagen Docker de Parental.'
     if status in (400, 401, 403) or name in ('InvalidSessionTokenException', 'InvalidOAuthConfigurationException'):
         return 'Nintendo ha rechazado la sesión. Vuelve a conectar la cuenta.'
     if isinstance(error, (TimeoutError, asyncio.TimeoutError)) or 'Timeout' in name:
